@@ -1,21 +1,19 @@
 import streamlit as st
 import subprocess
-import json
-from datetime import datetime, timedelta
-import pandas as pd
-import altair as alt
-
 from config import HABITS, LLM_MODEL, UI_THEME
+import pandas as pd
+from datetime import datetime, timedelta
 
-# Initialize or load habit completion history from session state
-if "history" not in st.session_state:
-    st.session_state.history = []
+# --- In-memory habit completions log ---
+# Ideally store in a DB or file, here just a dict for demo
+habit_log = {habit: [] for habit in HABITS}
 
-def run_ollama_prompt(habit):
+# --- Function to get encouragement message from Ollama ---
+def get_encouragement(habit):
+    prompt = f"Give a short, friendly, encouraging message for someone who just completed the habit: {habit}"
     try:
-        # Ollama command without --stdin flag, prompt passed directly
         result = subprocess.run(
-            ["ollama", "run", LLM_MODEL, "--prompt", f"Give a short, friendly, encouraging message for someone who just completed the habit: {habit}"],
+            ["ollama", "run", LLM_MODEL, prompt],
             capture_output=True,
             text=True,
             check=True
@@ -24,81 +22,68 @@ def run_ollama_prompt(habit):
     except subprocess.CalledProcessError as e:
         return f"AI error: {e}"
 
-def update_history(completed_habits):
-    timestamp = datetime.now()
-    for habit in completed_habits:
-        st.session_state.history.append({"habit": habit, "time": timestamp})
+# --- Streamlit UI setup ---
+st.set_page_config(page_title="Health Habit Buddy", layout="centered")
+st.markdown(
+    f"""
+    <style>
+    body {{
+        background-color: {UI_THEME['background']};
+        color: {UI_THEME['text']};
+    }}
+    div.stButton > button {{
+        background-color: {UI_THEME['button_color']};
+        color: {UI_THEME['button_text']};
+        border-radius: 8px;
+        padding: 8px 24px;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-def draw_calendar_graph(history):
-    if not history:
-        st.write("No habit completion data yet.")
-        return
-    
-    # Create DataFrame of completion dates and habits
-    df = pd.DataFrame(history)
-    df["date"] = df["time"].dt.date
+st.title("Health Habit Buddy")
 
-    # Count completions per day
-    daily_counts = df.groupby("date").size().reset_index(name="count")
-    
-    # Create calendar-like heatmap for last 7 days
+# --- Habit encouragement buttons ---
+for habit in HABITS:
+    if st.button(f"Complete {habit}"):
+        # Log completion date
+        habit_log[habit].append(datetime.now().date())
+        encouragement = get_encouragement(habit)
+        st.success(f"{habit} completed! Message: {encouragement}")
+
+# --- Weekly calendar heatmap ---
+
+def get_week_dates():
     today = datetime.now().date()
-    last_week = [today - timedelta(days=i) for i in range(6, -1, -1)]
+    start = today - timedelta(days=today.weekday())  # Monday this week
+    return [start + timedelta(days=i) for i in range(7)]
+
+week_dates = get_week_dates()
+
+# Prepare data for calendar graph
+data = []
+for habit in HABITS:
     counts = []
-    for day in last_week:
-        c = daily_counts.loc[daily_counts["date"] == day, "count"]
-        counts.append(int(c) if not c.empty else 0)
-    
-    calendar_df = pd.DataFrame({
-        "date": last_week,
-        "count": counts
-    })
+    for day in week_dates:
+        c = [d for d in habit_log[habit] if d == day]
+        counts.append(len(c))
+    data.append(counts)
 
-    chart = alt.Chart(calendar_df).mark_rect().encode(
-        x=alt.X("date:T", title="Date"),
-        color=alt.Color("count:Q", scale=alt.Scale(scheme="greys"), title="Habits completed")
-    ).properties(
-        width=500,
-        height=100
-    )
+df = pd.DataFrame(data, index=HABITS, columns=[d.strftime("%a\n%d-%b") for d in week_dates])
 
-    st.altair_chart(chart)
+st.subheader("Habit Completion This Week")
 
-def main():
-    st.set_page_config(page_title="Health Habit Buddy", layout="centered")
-    st.markdown(
-        f"""
-        <style>
-        .reportview-container {{
-            background-color: {UI_THEME['background']};
-            color: {UI_THEME['text']};
-        }}
-        .stButton > button {{
-            background-color: {UI_THEME['button']};
-            color: {UI_THEME['button_text']};
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+# Style for heatmap with black and white theme
+def color_map(val):
+    if val == 0:
+        return f"background-color: #222222; color: #555555"
+    else:
+        return f"background-color: #00FF00; color: #000000; font-weight: bold"
 
-    st.title("Health Habit Buddy")
+st.dataframe(df.style.applymap(color_map), height=250)
 
-    # Habit selection - multiselect for completing multiple habits
-    completed = st.multiselect("Select completed habits", HABITS)
-
-    if st.button("Generate Encouragements"):
-        if not completed:
-            st.warning("Please select at least one habit.")
-        else:
-            update_history(completed)
-            for habit in completed:
-                message = run_ollama_prompt(habit)
-                st.write(f"{habit} completed! Message: {message}")
-
-    st.markdown("---")
-    st.subheader("Weekly Habit Completion Calendar")
-    draw_calendar_graph(st.session_state.history)
-
-if __name__ == "__main__":
-    main()
+st.markdown(
+    "<p style='color:#888;font-size:0.8em;margin-top:20px;'>Note: Data resets on app reload (no persistent storage).</p>",
+    unsafe_allow_html=True
+)
