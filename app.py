@@ -5,7 +5,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # --- In-memory habit completions log ---
-# Ideally store in a DB or file, here just a dict for demo
 habit_log = {habit: [] for habit in HABITS}
 
 # --- Function to get encouragement message from Ollama ---
